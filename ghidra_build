@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+github_url="https://github.com/NationalSecurityAgency/ghidra"
+
+echo "[+] Cloning Ghidra..."
+git clone $github_url
+
+which gradle 2>&1 > /dev/null
+has_gradle="$?"
+if [ $has_gradle -ne 0 ];
+then
+    echo "[+] gradle is not installed! Would you like to download it? (y/N)"
+    read install_gradle
+    if [ $install_gradle = "Y" ] || [ $install_gradle = "y" ];
+    then
+        gradle="https://services.gradle.org/distributions/gradle-5.0-bin.zip"
+        which sdk 2>&1 > /dev/null
+        has_sdkman="$?"
+        if [ $has_sdkman -ne 0 ];
+        then
+            echo "[+] Downloading and installing sdk package manager..."
+            curl -s "https://get.sdkman.io" | bash
+            source "$HOME/.sdkman/bin/sdkman-init.sh"
+        fi
+        echo "[+] Installing gradle 5.0 via sdkman"
+        sdk install gradle 5.0
+    fi
+fi
+
+gradle_init_d="$HOME/.gradle/init.d"
+echo "[+] Creating repos.gradle"
+
+if [ ! -e $gradle_init_d ];
+then
+    mkdir -p "$HOME/.gradle/init.d/"
+fi
+
+repos="$gradle_init_d/repos.gradle"
+if [ ! -e $repos ];
+then
+    cat <<EOF > $repos
+    ext.HOME = System.getProperty('user.home')
+
+    allprojects {
+        repositories {
+            mavenCentral()
+            jcenter()
+            flatDir name:'flat', dirs:["$HOME/flatRepo"]
+        }
+    }
+EOF
+fi
+
+if [ ! -e $HOME/flatRepo ];
+then
+    echo "[+] Creating flatRepo"
+    mkdir -p "$HOME/flatRepo"
+fi
+
+
+echo "[+] Downloading dex-tools"
+count_dex="`find $HOME/flatRepo -name "dex*.jar" | wc -l | tr -d " "`"
+if [ $count_dex -ne 6 ];
+then
+    curl -OL https://github.com/pxb1988/dex2jar/releases/download/2.0/dex-tools-2.0.zip
+    mv dex-tools-2.0.zip /tmp/
+    unzip -qq -d /tmp /tmp/dex-tools-2.0.zip
+    cp /tmp/dex2jar-2.0/lib/dex-*.jar ~/flatRepo/
+fi
+
+echo "[+] Downloading AXMLPrinter2.jar"
+if [ ! -e "$HOME/flatRepo/AXMLPrinter2.jar" ]
+then
+    curl -OL https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android4me/AXMLPrinter2.jar 
+    mv AXMLPrinter2.jar $HOME/flatRepo/AXMLPrinter2.jar
+fi
+
+echo "[+] Downloading HFS Explorer"
+hfsx_count="`find $HOME/flatRepo -name "hfsx*.jar" | wc -l | tr -d " "`"
+if [ $hfsx_count -ne 2 ];
+then
+    mkdir /tmp/hfsx
+    curl -OL https://github.com/unsound/hfsexplorer/releases/download/hfsexplorer-0.21/hfsexplorer-0_21-bin.zip -o /tmp/hfsexplorer-0_21-bin.zip
+    unzip -qq -d /tmp/hfsx hfsexplorer-0_21-bin.zip 
+    cp /tmp/hfsx/lib/csframework.jar ~/flatRepo
+    cp /tmp/hfsx/lib/hfsx_dmglib.jar ~/flatRepo
+    cp /tmp/hfsx/lib/hfsx.jar ~/flatRepo
+    cp /tmp/hfsx/lib/iharder-base64.jar ~/flatRepo
+    rm -rf /tmp/hfsx
+fi
+
+mkdir -p $PWD/ghidra.bin/Ghidra/Features/GhidraServer/
+curl -OL https://sourceforge.net/projects/yajsw/files/yajsw/yajsw-stable-12.12/yajsw-stable-12.12.zip 
+mv yajsw-stable-12.12.zip ~/git/ghidra.bin/Ghidra/Features/GhidraServer/
+
+mkdir -p ~/git/ghidra.bin/GhidraBuild/EclipsePlugins/GhidraDev/buildDependencies/
+curl -OL 'http://www.eclipse.org/downloads/download.php?r=1&protocol=https&file=/tools/cdt/releases/8.6/cdt-8.6.0.zip' 
+mv cdt-8.6.0.zip ~/git/ghidra.bin/GhidraBuild/EclipsePlugins/GhidraDev/buildDependencies
+curl -OL https://sourceforge.net/projects/pydev/files/pydev/PyDev%206.3.1/PyDev%206.3.1.zip 
+mv PyDev%206.3.1.zip ~/git/ghidra.bin/GhidraBuild/EclipsePlugins/GhidraDev/buildDependencies/PyDev\ 6.3.1.zip
+
+old_dir=$PWD
+cd ghidra
+os=`uname -s`
+
+buildNatives=""
+if [ $os = "Darwin" ];
+then
+    buildNatives="buildNatives_osx64"
+elif [ $os = "Linux" ];
+then
+    buildNatives="buildNatives_linux64"
+else
+    echo "[X] Unsupported OS $os"
+    exit
+fi
+
+gradle eclipse
+gradle prepDev -x yajswDevUnpack eclipse
+gradle sleighCompile
+gradle $buildNatives
+gradle yajswDevUnpack
+gradle buildGhidra
+gradle cdtUnpack pyDevUnpack
+gradle eclipse -PeclipsePDE
+cd $old_dir
